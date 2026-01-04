@@ -66,3 +66,7 @@ venv/
 env/
 ENV/
 .venv
+
+# IDE and tool directories (IDE 和工具目录不提交)
+.github/
+.cursor/
