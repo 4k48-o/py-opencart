@@ -1,0 +1,7 @@
+# Environment variables (包含敏感信息如密码、密钥等)
+.env
+.env.test
+.env.local
+.env.*.local
+*.env
+!.env.example

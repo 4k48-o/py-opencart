@@ -1,0 +1,40 @@
+[flake8]
+# 最大行长度（与 Black 保持一致）
+max-line-length = 88
+
+# 排除目录
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    migrations,
+    build,
+    dist,
+    *.pyc,
+    .eggs,
+    *.egg-info
+
+# 忽略的错误代码
+# E203: whitespace before ':' (与 Black 冲突)
+# E501: line too long (由 Black 处理)
+# W503: line break before binary operator (与 Black 冲突)
+ignore =
+    E203,
+    E501,
+    W503
+
+# 每个文件的特殊忽略规则
+per-file-ignores =
+    __init__.py:F401,  # 允许未使用的导入（用于导出）
+    */migrations/*:E501,  # 迁移文件允许长行
+
+# 最大复杂度
+max-complexity = 10
+
+# 统计信息
+statistics = true
+
+# 显示错误来源
+show-source = true
+

@@ -1,0 +1,67 @@
+# Pre-commit 配置文件
+# 用于在提交代码前自动运行代码检查工具
+
+repos:
+  # Black 代码格式化
+  - repo: https://github.com/psf/black
+    rev: 23.12.1
+    hooks:
+      - id: black
+        language_version: python3.9
+        args: [--line-length=88]
+
+  # Flake8 代码检查
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.0.0
+    hooks:
+      - id: flake8
+        args: [
+          --max-line-length=88,
+          --extend-ignore=E203,W503,E501
+        ]
+        additional_dependencies: [
+          flake8-docstrings,
+          flake8-bugbear
+        ]
+
+  # MyPy 类型检查
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.7.1
+    hooks:
+      - id: mypy
+        additional_dependencies: [
+          types-all,
+          types-requests
+        ]
+        args: [
+          --ignore-missing-imports,
+          --show-error-codes
+        ]
+
+  # 检查 YAML 文件
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.33.0
+    hooks:
+      - id: yamllint
+        args: [-d, '{extends: default, rules: {line-length: {max: 120}}}']
+
+  # 检查 JSON 文件
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: check-json
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-docstring-first
+
+  # 安全检查
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.5
+    hooks:
+      - id: bandit
+        args: [-r, app/, -ll]
+        exclude: tests/
+

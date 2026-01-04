@@ -1,0 +1,38 @@
+"""
+Tortoise ORM model for product_to_store table
+"""
+
+from tortoise.models import Model
+from tortoise import fields
+from .product import Product
+from ..system.store import Store
+
+
+class ProductToStore(Model):
+    """
+    ProductToStore model
+    
+    Represents the product_to_store table in the OpenCart database.
+    
+    Attributes:
+        product_id (int(11)) - Primary key
+        store_id (int(11)) - Primary key, default: 0
+    """
+
+    product_id = fields.IntField(null=True)
+    store_id = fields.IntField(null=True, default=0)
+
+    class Meta:
+        table = "oc_product_to_store"
+        unique_together = (("product_id", "store_id"),)
+
+    async def get_product(self):
+        """Get related Product"""
+        if self.product_id:
+            return await Product.get(product_id=self.product_id)
+        return None
+    async def get_store(self):
+        """Get related Store"""
+        if self.store_id:
+            return await Store.get(store_id=self.store_id)
+        return None

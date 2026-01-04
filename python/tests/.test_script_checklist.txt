@@ -1,0 +1,35 @@
+========================================
+测试脚本开发检查清单
+========================================
+
+编写测试脚本前，请完成以下检查：
+
+□ 1. 已阅读 TEST_SCRIPT_DEVELOPMENT_GUIDELINES.md
+□ 2. 已阅读 TEST_SCRIPT_FAILURE_SUMMARY.md
+□ 3. 已在 conftest.py 中添加新模块权限
+□ 4. 已检查模型是否使用复合主键
+□ 5. 已查看 Schema 定义和验证规则
+
+编写测试脚本时，请遵循：
+
+□ 6. 使用 UUID 生成唯一测试数据
+□ 7. 复合主键模型使用 filter().values()
+□ 8. 无认证测试期望 401（不是 403）
+□ 9. Schema 验证失败期望 422（不是 400）
+□ 10. Schema 验证错误捕获 ValidationError
+□ 11. 业务验证错误捕获 ValidationException
+□ 12. 异步 fixture 不需要 await
+□ 13. 添加了所有必要的测试标记
+
+提交测试脚本前，请验证：
+
+□ 14. 所有测试用例都能通过
+□ 15. 测试独立，不依赖其他测试
+□ 16. 使用了 db_transaction fixture 确保数据清理
+
+========================================
+详细说明请参考：
+- TEST_SCRIPT_DEVELOPMENT_GUIDELINES.md
+- TEST_SCRIPT_FAILURE_SUMMARY.md
+- TEST_SCRIPT_QUICK_REFERENCE.md
+========================================

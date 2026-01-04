@@ -1,0 +1,462 @@
+"""
+AttributeGroup service - 属性组服务层
+"""
+import logging
+from typing import List, Optional
+from tortoise.exceptions import DoesNotExist, IntegrityError
+
+try:
+    from app.models.catalog.attribute_group import AttributeGroup
+    from app.models.catalog.attribute_group_description import AttributeGroupDescription
+    from app.models.catalog.attribute import Attribute
+    from app.models.localisation.language import Language
+except (ImportError, AttributeError):
+    import importlib
+    attribute_group_module = importlib.import_module('app.models.catalog.attribute_group')
+    AttributeGroup = attribute_group_module.AttributeGroup
+    attribute_group_desc_module = importlib.import_module('app.models.catalog.attribute_group_description')
+    AttributeGroupDescription = attribute_group_desc_module.AttributeGroupDescription
+    attribute_module = importlib.import_module('app.models.catalog.attribute')
+    Attribute = attribute_module.Attribute
+    language_module = importlib.import_module('app.models.localisation.language')
+    Language = language_module.Language
+
+from app.schemas.attribute_group import (
+    AttributeGroupCreate, AttributeGroupUpdate, AttributeGroupResponse,
+    AttributeGroupDescriptionResponse, AttributeGroupDescriptionCreate
+)
+from app.services.base_service import BaseService
+from app.exceptions import NotFoundException, ConflictException, ValidationException
+
+logger = logging.getLogger(__name__)
+
+
+class AttributeGroupService(BaseService):
+    """属性组服务"""
+    
+    async def list_attribute_groups(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        sort: str = "sort_order",
+        order: str = "asc",
+        filter_name: Optional[str] = None,
+        language_id: Optional[int] = None
+    ) -> List[AttributeGroupResponse]:
+        """
+        获取属性组列表
+        
+        Args:
+            skip: 跳过的记录数
+            limit: 返回的记录数
+            sort: 排序字段（sort_order, name）
+            order: 排序方向（asc, desc）
+            filter_name: 按名称筛选（模糊匹配）
+            language_id: 语言ID（用于返回对应语言的名称）
+            
+        Returns:
+            List[AttributeGroupResponse]: 属性组列表
+        """
+        logger.info(f"开始获取属性组列表: skip={skip}, limit={limit}")
+        try:
+            query = AttributeGroup.all()
+            
+            # 名称筛选
+            if filter_name:
+                # 通过描述表筛选
+                desc_ids = await AttributeGroupDescription.filter(
+                    name__icontains=filter_name
+                ).values_list('attribute_group_id', flat=True)
+                if desc_ids:
+                    query = query.filter(attribute_group_id__in=desc_ids)
+                else:
+                    # 如果没有匹配的描述，返回空列表
+                    return []
+            
+            # 排序
+            if sort == "name" and language_id:
+                # 按名称排序需要先获取描述
+                # 这里简化处理，先按sort_order排序
+                sort_field = "sort_order"
+            else:
+                sort_field = sort if sort in ["sort_order"] else "sort_order"
+            
+            if order == "desc":
+                query = query.order_by(f"-{sort_field}")
+            else:
+                query = query.order_by(sort_field)
+            
+            groups = await query.offset(skip).limit(limit)
+            
+            # 构建响应
+            result = []
+            for group in groups:
+                response = await self._build_attribute_group_response(group, language_id)
+                result.append(response)
+            
+            logger.info(f"属性组列表获取完成: count={len(result)}")
+            return result
+        except Exception as e:
+            logger.error(f"获取属性组列表失败: {str(e)}")
+            raise
+    
+    async def get_attribute_group(
+        self,
+        attribute_group_id: int,
+        language_id: Optional[int] = None
+    ) -> AttributeGroupResponse:
+        """
+        获取属性组详情
+        
+        Args:
+            attribute_group_id: 属性组ID
+            language_id: 语言ID（用于返回对应语言的名称）
+            
+        Returns:
+            AttributeGroupResponse: 属性组信息
+            
+        Raises:
+            NotFoundException: 属性组不存在
+        """
+        logger.info(f"开始获取属性组详情: attribute_group_id={attribute_group_id}")
+        try:
+            group = await AttributeGroup.get_or_none(attribute_group_id=attribute_group_id)
+            if not group:
+                raise NotFoundException("属性组", attribute_group_id)
+            
+            response = await self._build_attribute_group_response(group, language_id)
+            logger.info(f"属性组详情获取完成: attribute_group_id={attribute_group_id}")
+            return response
+        except NotFoundException:
+            raise
+        except DoesNotExist:
+            raise NotFoundException("属性组", attribute_group_id)
+        except Exception as e:
+            logger.error(f"获取属性组详情失败: attribute_group_id={attribute_group_id}, error={str(e)}")
+            raise
+    
+    async def create_attribute_group(
+        self,
+        data: AttributeGroupCreate
+    ) -> AttributeGroupResponse:
+        """
+        创建属性组
+        
+        Args:
+            data: 属性组创建数据
+            
+        Returns:
+            AttributeGroupResponse: 创建的属性组信息
+            
+        Raises:
+            ValidationException: 验证失败
+        """
+        logger.info("开始创建属性组")
+        try:
+            # 验证描述数据
+            if not data.descriptions or len(data.descriptions) == 0:
+                raise ValidationException("至少需要提供一个语言描述")
+            
+            # 检查语言ID是否重复
+            language_ids = [desc.language_id for desc in data.descriptions]
+            if len(language_ids) != len(set(language_ids)):
+                raise ValidationException("描述中的语言ID不能重复")
+            
+            # 验证语言是否存在
+            for desc in data.descriptions:
+                language = await Language.get_or_none(language_id=desc.language_id)
+                if not language:
+                    raise ValidationException(f"语言ID {desc.language_id} 不存在")
+            
+            # 创建属性组
+            group = await AttributeGroup.create(
+                sort_order=data.sort_order or 0
+            )
+            
+            # 创建描述
+            for desc_data in data.descriptions:
+                await AttributeGroupDescription.create(
+                    attribute_group_id=group.attribute_group_id,
+                    language_id=desc_data.language_id,
+                    name=desc_data.name
+                )
+            
+            # 构建响应
+            response = await self._build_attribute_group_response(group)
+            
+            logger.info(f"属性组创建完成: attribute_group_id={group.attribute_group_id}")
+            return response
+        except (ValidationException, ConflictException):
+            raise
+        except IntegrityError as e:
+            logger.error(f"创建属性组失败（完整性错误）: {str(e)}")
+            raise ConflictException(f"创建属性组失败: {str(e)}")
+        except Exception as e:
+            logger.error(f"创建属性组失败: {str(e)}")
+            raise
+    
+    async def update_attribute_group(
+        self,
+        attribute_group_id: int,
+        data: AttributeGroupCreate
+    ) -> AttributeGroupResponse:
+        """
+        完整更新属性组
+        
+        Args:
+            attribute_group_id: 属性组ID
+            data: 属性组更新数据
+            
+        Returns:
+            AttributeGroupResponse: 更新后的属性组信息
+            
+        Raises:
+            NotFoundException: 属性组不存在
+            ValidationException: 验证失败
+        """
+        logger.info(f"开始更新属性组: attribute_group_id={attribute_group_id}")
+        try:
+            group = await AttributeGroup.get_or_none(attribute_group_id=attribute_group_id)
+            if not group:
+                raise NotFoundException("属性组", attribute_group_id)
+            
+            # 验证描述数据
+            if not data.descriptions or len(data.descriptions) == 0:
+                raise ValidationException("至少需要提供一个语言描述")
+            
+            # 检查语言ID是否重复
+            language_ids = [desc.language_id for desc in data.descriptions]
+            if len(language_ids) != len(set(language_ids)):
+                raise ValidationException("描述中的语言ID不能重复")
+            
+            # 验证语言是否存在
+            for desc in data.descriptions:
+                language = await Language.get_or_none(language_id=desc.language_id)
+                if not language:
+                    raise ValidationException(f"语言ID {desc.language_id} 不存在")
+            
+            # 更新属性组
+            group.sort_order = data.sort_order or 0
+            await group.save()
+            
+            # 删除旧描述
+            await AttributeGroupDescription.filter(attribute_group_id=attribute_group_id).delete()
+            
+            # 创建新描述
+            for desc_data in data.descriptions:
+                await AttributeGroupDescription.create(
+                    attribute_group_id=group.attribute_group_id,
+                    language_id=desc_data.language_id,
+                    name=desc_data.name
+                )
+            
+            # 构建响应
+            response = await self._build_attribute_group_response(group)
+            
+            logger.info(f"属性组更新完成: attribute_group_id={attribute_group_id}")
+            return response
+        except (NotFoundException, ValidationException, ConflictException):
+            raise
+        except DoesNotExist:
+            raise NotFoundException("属性组", attribute_group_id)
+        except Exception as e:
+            logger.error(f"更新属性组失败: attribute_group_id={attribute_group_id}, error={str(e)}")
+            raise
+    
+    async def patch_attribute_group(
+        self,
+        attribute_group_id: int,
+        data: AttributeGroupUpdate
+    ) -> AttributeGroupResponse:
+        """
+        部分更新属性组
+        
+        Args:
+            attribute_group_id: 属性组ID
+            data: 属性组更新数据
+            
+        Returns:
+            AttributeGroupResponse: 更新后的属性组信息
+            
+        Raises:
+            NotFoundException: 属性组不存在
+            ValidationException: 验证失败
+        """
+        logger.info(f"开始部分更新属性组: attribute_group_id={attribute_group_id}")
+        try:
+            group = await AttributeGroup.get_or_none(attribute_group_id=attribute_group_id)
+            if not group:
+                raise NotFoundException("属性组", attribute_group_id)
+            
+            update_data = data.model_dump(exclude_unset=True)
+            
+            if not update_data:
+                raise ValidationException("没有需要更新的字段")
+            
+            # 更新属性组字段
+            if 'sort_order' in update_data:
+                group.sort_order = update_data['sort_order']
+                await group.save()
+            
+            # 更新描述（如果提供）
+            if data.descriptions is not None:
+                # 验证描述数据
+                if len(data.descriptions) == 0:
+                    raise ValidationException("描述数组不能为空")
+                
+                # 检查语言ID是否重复
+                language_ids = [desc.language_id for desc in data.descriptions]
+                if len(language_ids) != len(set(language_ids)):
+                    raise ValidationException("描述中的语言ID不能重复")
+                
+                # 验证语言是否存在
+                for desc in data.descriptions:
+                    language = await Language.get_or_none(language_id=desc.language_id)
+                    if not language:
+                        raise ValidationException(f"语言ID {desc.language_id} 不存在")
+                
+                # 删除旧描述
+                await AttributeGroupDescription.filter(attribute_group_id=attribute_group_id).delete()
+                
+                # 创建新描述
+                for desc_data in data.descriptions:
+                    await AttributeGroupDescription.create(
+                        attribute_group_id=group.attribute_group_id,
+                        language_id=desc_data.language_id,
+                        name=desc_data.name
+                    )
+            
+            # 构建响应
+            response = await self._build_attribute_group_response(group)
+            
+            logger.info(f"属性组部分更新完成: attribute_group_id={attribute_group_id}")
+            return response
+        except (NotFoundException, ValidationException, ConflictException):
+            raise
+        except DoesNotExist:
+            raise NotFoundException("属性组", attribute_group_id)
+        except Exception as e:
+            logger.error(f"部分更新属性组失败: attribute_group_id={attribute_group_id}, error={str(e)}")
+            raise
+    
+    async def delete_attribute_group(self, attribute_group_id: int) -> None:
+        """
+        删除属性组
+        
+        Args:
+            attribute_group_id: 属性组ID
+            
+        Raises:
+            NotFoundException: 属性组不存在
+            ConflictException: 属性组下有属性，无法删除
+        """
+        logger.info(f"开始删除属性组: attribute_group_id={attribute_group_id}")
+        try:
+            group = await AttributeGroup.get_or_none(attribute_group_id=attribute_group_id)
+            if not group:
+                raise NotFoundException("属性组", attribute_group_id)
+            
+            # 检查是否有属性
+            attribute_count = await Attribute.filter(attribute_group_id=attribute_group_id).count()
+            if attribute_count > 0:
+                raise ConflictException(
+                    "属性组下存在属性，无法删除",
+                    details={"attribute_count": attribute_count}
+                )
+            
+            # 删除描述
+            await AttributeGroupDescription.filter(attribute_group_id=attribute_group_id).delete()
+            
+            # 删除属性组
+            await group.delete()
+            
+            logger.info(f"属性组删除完成: attribute_group_id={attribute_group_id}")
+        except (NotFoundException, ConflictException):
+            raise
+        except DoesNotExist:
+            raise NotFoundException("属性组", attribute_group_id)
+        except Exception as e:
+            logger.error(f"删除属性组失败: attribute_group_id={attribute_group_id}, error={str(e)}")
+            raise
+    
+    # ==================== 私有方法 ====================
+    
+    async def _get_language_code(self, language_id: int) -> Optional[str]:
+        """
+        获取语言代码
+        
+        Args:
+            language_id: 语言ID
+            
+        Returns:
+            Optional[str]: 语言代码
+        """
+        try:
+            language = await Language.get_or_none(language_id=language_id)
+            return language.code if language else None
+        except Exception:
+            return None
+    
+    async def _build_attribute_group_response(
+        self,
+        group: AttributeGroup,
+        language_id: Optional[int] = None
+    ) -> AttributeGroupResponse:
+        """
+        构建属性组响应对象
+        
+        Args:
+            group: AttributeGroup模型实例
+            language_id: 语言ID（用于返回对应语言的名称）
+            
+        Returns:
+            AttributeGroupResponse: 属性组响应对象
+        """
+        # 获取所有描述
+        # 使用 values() 方法避免 Tortoise ORM 尝试选择不存在的 'id' 字段
+        descriptions_data = await AttributeGroupDescription.filter(
+            attribute_group_id=group.attribute_group_id
+        ).values('attribute_group_id', 'language_id', 'name')
+        
+        # 手动构建描述对象列表
+        descriptions = []
+        for desc_data in descriptions_data:
+            desc = AttributeGroupDescription()
+            desc.attribute_group_id = desc_data['attribute_group_id']
+            desc.language_id = desc_data['language_id']
+            desc.name = desc_data['name']
+            descriptions.append(desc)
+        
+        # 获取属性数量
+        attribute_count = await Attribute.filter(
+            attribute_group_id=group.attribute_group_id
+        ).count()
+        
+        # 构建描述响应
+        desc_responses = []
+        for desc in descriptions:
+            lang_code = await self._get_language_code(desc.language_id)
+            desc_responses.append(AttributeGroupDescriptionResponse(
+                language_id=desc.language_id,
+                language_code=lang_code,
+                name=desc.name or ""
+            ))
+        
+        # 获取当前语言的名称
+        name = None
+        if language_id:
+            desc_data_list = await AttributeGroupDescription.filter(
+                attribute_group_id=group.attribute_group_id,
+                language_id=language_id
+            ).limit(1).values('name')
+            if desc_data_list:
+                name = desc_data_list[0]['name']
+        
+        return AttributeGroupResponse(
+            attribute_group_id=group.attribute_group_id,
+            sort_order=group.sort_order or 0,
+            descriptions=desc_responses,
+            attribute_count=attribute_count,
+            name=name
+        )
+
