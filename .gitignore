@@ -60,3 +60,9 @@ python/.env.*
 
 # PHP folder (PHP 文件夹下的所有内容不提交)
 php/
+
+# Python virtual environment (虚拟环境不提交)
+venv/
+env/
+ENV/
+.venv
