@@ -24,6 +24,31 @@ else:
     if env_path.exists():
         load_dotenv(env_path)
 
+# 在模块级别设置测试环境变量（在任何导入之前）
+# 确保FastAPI应用导入时就能检测到测试环境
+# 这是架构组推荐方案2的实现：确保TESTING环境变量在所有代码执行前就设置好
+os.environ["TESTING"] = "1"
+
+# 使用pytest_configure hook确保环境变量在pytest加载任何测试文件之前就设置好
+# 这比模块级别的设置更早，可以确保即使测试文件在导入时就创建FastAPI应用，也能检测到测试环境
+def pytest_configure(config):
+    """pytest配置hook，在pytest加载任何测试文件之前执行"""
+    os.environ["TESTING"] = "1"
+    os.environ["PYTEST"] = "1"
+
+# 在pytest会话开始时也设置一次（双重保险）
+@pytest.fixture(scope="session", autouse=True)
+def set_testing_env():
+    """在pytest会话开始时设置测试环境变量（双重保险）
+    
+    注意：TESTING环境变量已在模块级别设置，此fixture作为双重保险。
+    确保在所有fixture和测试执行前就设置好，让FastAPI的startup_event能检测到测试环境。
+    """
+    os.environ["TESTING"] = "1"
+    yield
+    # 测试结束后清理（可选）
+    # os.environ.pop("TESTING", None)
+
 
 def get_test_db_config():
     """获取测试数据库配置"""
@@ -72,11 +97,17 @@ def get_test_redis_config():
 
 @pytest.fixture(scope="function")
 async def db_setup():
-    """Setup database connection for tests"""
+    """Setup database connection for tests
+    
+    注意：TESTING环境变量已在session级别的fixture中设置（set_testing_env），
+    确保FastAPI的startup_event跳过init_db()，使用db_setup创建的连接，
+    避免双重连接导致的事务隔离问题。这是架构组推荐方案2的实现。
+    """
     db_config = get_test_db_config()
     
     # 构建数据库连接URL
     # 如果密码为空，则不包含密码部分
+    # 注意：不需要在URL中添加max_connections参数，Tortoise ORM会自动管理连接池
     if db_config["password"]:
         db_url = f"mysql://{db_config['user']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['name']}"
     else:
@@ -100,6 +131,9 @@ async def db_setup():
     )
     yield
     await Tortoise.close_connections()
+    
+    # 清理测试环境变量（可选，不影响其他测试）
+    # os.environ.pop("TESTING", None)
 
 
 @pytest.fixture(scope="function")
@@ -173,7 +207,12 @@ async def redis_setup():
 
 @pytest.fixture
 async def db_transaction(db_setup):
-    """Create a database transaction for each test"""
+    """Create a database transaction for each test
+    
+    注意：根据架构组分析（19-制造商API测试失败架构层面根本原因分析.md），
+    我们已经实现了方案1（统一数据库连接），让FastAPI应用复用测试环境的连接。
+    因此不需要修改事务隔离级别，保持MySQL默认的REPEATABLE READ隔离级别即可。
+    """
     # Start transaction
     connection = Tortoise.get_connection("default")
     await connection.execute_query("START TRANSACTION")
@@ -196,6 +235,7 @@ async def test_user_group(db_transaction):
         "attribute_group": ["read", "create", "update", "delete"],
         "category": ["read", "create", "update", "delete"],
         "product": ["read", "create", "update", "delete"],
+        "manufacturer": ["read", "create", "update", "delete"],
     }
     
     user_group = UserGroup(
@@ -279,10 +319,29 @@ async def auth_headers(db_transaction, test_user):
 
 
 @pytest.fixture
-async def async_client(db_setup):
-    """Create an async HTTP client for testing"""
+async def async_client(db_setup, db_transaction):
+    """Create an async HTTP client for testing
+    
+    注意：
+    1. db_setup已经初始化了Tortoise ORM，创建了连接A
+    2. db_transaction在连接A上启动了事务
+    3. TESTING环境变量已在模块级别和pytest_configure中设置
+    4. FastAPI的startup_event应该能检测到测试环境并跳过init_db()，使用db_setup创建的连接A
+    5. async_client现在也依赖db_transaction，确保API请求在同一个事务中执行
+    
+    关键：ASGITransport在第一次请求时会自动触发startup事件，此时startup_event会检测到
+    TESTING=1并跳过init_db()，确保API使用db_setup创建的连接A，从而能看到db_transaction中的未提交数据。
+    """
     from httpx import AsyncClient, ASGITransport
     from app.main import app
+    
+    # 确保环境变量已设置（双重保险）
+    import os
+    if os.getenv("TESTING") != "1":
+        os.environ["TESTING"] = "1"
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning("async_client: TESTING环境变量未设置，已重新设置")
     
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

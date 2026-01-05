@@ -61,6 +61,8 @@ async def admin_user_group(db_transaction):
         "option": ["read", "create", "update", "delete"],
         "option_value": ["read", "create", "update", "delete"],
         "category": ["read", "create", "update", "delete"],
+        "product": ["read", "create", "update", "delete"],
+        "manufacturer": ["read", "create", "update", "delete"],
     }
     
     from app.models.system.user_group import UserGroup
@@ -109,6 +111,7 @@ async def update_user_group(db_transaction):
     """创建仅更新权限的用户组"""
     permissions = {
         "category": ["read", "update"],
+        "manufacturer": ["read", "update"],
     }
     
     from app.models.system.user_group import UserGroup
